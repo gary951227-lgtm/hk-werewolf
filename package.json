@@ -1,0 +1,29 @@
+{
+  "name": "hk-werewolf",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hong Kong Cantonese WhatsApp Werewolf bot on Cloudflare Workers",
+  "scripts": {
+    "test": "node --experimental-strip-types --test src/game/*.test.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create hk-werewolf",
+    "db:migrate": "wrangler d1 execute hk-werewolf --remote --file=migrations/0001_init.sql",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
+    "whatsapp-cloudflare-workers": "6.7.17-worker-1.0.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261023.1",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.42.0"
+  }
+}
