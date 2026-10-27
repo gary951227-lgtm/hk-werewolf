@@ -1,7 +1,6 @@
 import {
   Browsers,
   DisconnectReason,
-  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
 } from "whatsapp-cloudflare-workers";
@@ -22,7 +21,20 @@ export interface SessionResult {
   error?: string;
 }
 
-const DEFAULT_VERSION: [number, number, number] = [2, 3000, 1027934701];
+const DEFAULT_VERSION: [number, number, number] = [2, 3000, 1051880875];
+
+async function currentWaVersion(): Promise<[number, number, number]> {
+  try {
+    const text = await fetch("https://web.whatsapp.com/sw.js", {
+      headers: { "user-agent": "Mozilla/5.0" },
+    }).then((response) => response.text());
+    const match = text.match(/client_revision["\\]*:\s*(\d+)/);
+    if (match?.[1]) return [2, 3000, Number(match[1])];
+  } catch {
+    // WhatsApp Web could not be fetched; the fallback is recent enough to pair.
+  }
+  return DEFAULT_VERSION;
+}
 
 export async function withSession(
   db: D1Database,
@@ -41,14 +53,9 @@ export async function withSession(
 export async function openWhatsApp(db: D1Database) {
   const { state, saveCreds } = await useD1AuthState(db);
   const logger = pino({ level: "silent" });
-  let version = DEFAULT_VERSION;
-  try {
-    const latest = await fetchLatestBaileysVersion();
-    if (Array.isArray(latest.version)) version = latest.version as [number, number, number];
-  } catch {
-    version = DEFAULT_VERSION;
-  }
+  const version = await currentWaVersion();
 
+  console.log("wa version", version.join("."));
   const sock = makeWASocket({
     version,
     logger,
@@ -57,7 +64,7 @@ export async function openWhatsApp(db: D1Database) {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
-    browser: Browsers.macOS("HK Werewolf"),
+    browser: Browsers.macOS("Chrome"),
     markOnlineOnConnect: false,
     syncFullHistory: false,
     generateHighQualityLinkPreview: false,

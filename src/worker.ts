@@ -45,7 +45,12 @@ async function linkResponse(env: Env, ctx: ExecutionContext): Promise<Response> 
   }
   const session = await openWhatsApp(env.DB);
   await session.waitForQr(20_000);
-  const html = await adminHtml(env, session.qr());
+  const qr = session.qr();
+  if (qr) {
+    await remember(env.DB, "status", "qr");
+    await env.DB.prepare("DELETE FROM meta WHERE key = 'last_error'").run();
+  }
+  const html = await adminHtml(env, qr);
   ctx.waitUntil((async () => {
     try {
       await forgetOldSeen(env.DB, Date.now());
@@ -138,7 +143,7 @@ async function adminHtml(env: Env, freshQr?: string): Promise<string> {
   <h1>香港廣東話狼人殺</h1>
   <p>${linked ? "WhatsApp 已連過線。每分鐘會短線上線聽訊息。" : "未連線。用有 token 嘅 /link 產生二維碼，然後用 WhatsApp「已連結的裝置」掃。"}</p>
   ${svg}
-  <p>狀態：${status || "未知"}。上次輪詢：${lastPoll || "未有"}。</p>
+  <p>狀態：${status === "qr" ? "請掃下面個二維碼" : status === "open" ? "已連線" : status === "closed" ? "未連上" : status || "未知"}。上次輪詢：${lastPoll || "未有"}。</p>
   ${lastError ? `<p>上次錯誤：${escapeHtml(lastError)}</p>` : ""}
   <p>${tokenHint}。例如 <code>/link?token=...</code> 同 <code>/poll?token=...</code>。</p>
   <p>群組指令：開局、加入、退出、開始、狀態、規則、結束討論、投票 3、結束。夜晚行動要私訊機械人。</p>
