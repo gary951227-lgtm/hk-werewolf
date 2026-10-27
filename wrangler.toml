@@ -9,4 +9,4 @@ crons = ["* * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "hk-werewolf"
-database_id = "replace-after-d1-create"
+database_id = "d37e06b0-0dd2-4268-985a-e7b66aa69e0f"
