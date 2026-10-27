@@ -10,7 +10,8 @@
     "deploy": "wrangler deploy",
     "db:create": "wrangler d1 create hk-werewolf",
     "db:migrate": "wrangler d1 execute hk-werewolf --remote --file=migrations/0001_init.sql",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "node scripts/fix-wa-websocket.mjs"
   },
   "engines": {
     "node": ">=22.5"

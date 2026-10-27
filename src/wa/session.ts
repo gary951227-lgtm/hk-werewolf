@@ -1,8 +1,9 @@
-import makeWASocket, {
+import {
   Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  makeWASocket,
 } from "whatsapp-cloudflare-workers";
 import pino from "pino";
 import { useD1AuthState } from "./auth.ts";
@@ -28,6 +29,16 @@ export async function withSession(
   listenMs: number,
   hooks: SessionHooks,
 ): Promise<SessionResult> {
+  const session = await openWhatsApp(db);
+  try {
+    await session.pump(listenMs, hooks);
+    return session.result();
+  } finally {
+    await session.finish();
+  }
+}
+
+export async function openWhatsApp(db: D1Database) {
   const { state, saveCreds } = await useD1AuthState(db);
   const logger = pino({ level: "silent" });
   let version = DEFAULT_VERSION;
@@ -63,9 +74,14 @@ export async function withSession(
   sock.ev.on("connection.update", (update) => {
     if (update.qr) qr = update.qr;
     if (update.connection === "open") opened = true;
+    if (update.connection) console.log("wa connection", update.connection);
     if (update.connection === "close") {
-      const code = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) failure = "logged-out";
+      const error = update.lastDisconnect?.error as { message?: string; output?: { statusCode?: number } } | undefined;
+      const code = error?.output?.statusCode;
+      failure = code === DisconnectReason.loggedOut
+        ? "logged-out"
+        : `close ${code ?? "?"} ${error?.message ?? ""}`.slice(0, 300);
+      console.log("wa disconnect", failure);
     }
   });
   sock.ev.on("messages.upsert", (upsert) => {
@@ -79,32 +95,45 @@ export async function withSession(
     await sock.sendMessage(jid, { text });
   };
 
-  const started = Date.now();
-  try {
-    while (Date.now() - started < listenMs) {
-      const batch = queue.splice(0, queue.length);
-      for (const message of batch) await hooks.onMessage(message, send);
-      if (failure) break;
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
-    if (opened && hooks.onIdle) await hooks.onIdle(send);
-    const leftover = queue.splice(0, queue.length);
-    for (const message of leftover) await hooks.onMessage(message, send);
-  } catch (error) {
-    failure = error instanceof Error ? error.message : String(error);
-  } finally {
-    try {
-      sock.end(undefined);
-    } catch {
-      // The socket may already be closed.
-    }
-  }
-
-  await saveCreds();
-  if (qr) await remember(db, "qr", qr);
-  await remember(db, "status", opened ? "open" : qr ? "qr" : "closed");
-  if (failure) await remember(db, "last_error", failure);
-  return { status: opened ? "open" : qr ? "qr" : "closed", qr, error: failure };
+  return {
+    qr: () => qr,
+    async waitForQr(ms: number) {
+      const started = Date.now();
+      while (Date.now() - started < ms && !qr && !opened && !failure) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    },
+    async pump(ms: number, hooks: SessionHooks) {
+      const started = Date.now();
+      try {
+        while (Date.now() - started < ms) {
+          const batch = queue.splice(0, queue.length);
+          for (const message of batch) await hooks.onMessage(message, send);
+          if (failure) break;
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+        if (opened && hooks.onIdle) await hooks.onIdle(send);
+        const leftover = queue.splice(0, queue.length);
+        for (const message of leftover) await hooks.onMessage(message, send);
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
+    },
+    result(): SessionResult {
+      return { status: opened ? "open" : qr ? "qr" : "closed", qr, error: failure };
+    },
+    async finish() {
+      try {
+        sock.end(undefined);
+      } catch {
+        // The socket may already be closed.
+      }
+      await saveCreds();
+      if (qr) await remember(db, "qr", qr);
+      await remember(db, "status", opened ? "open" : qr ? "qr" : "closed");
+      if (failure) await remember(db, "last_error", failure);
+    },
+  };
 }
 
 async function remember(db: D1Database, key: string, value: string): Promise<void> {

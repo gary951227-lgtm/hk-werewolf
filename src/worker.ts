@@ -1,6 +1,6 @@
 import QRCode from "qrcode";
 import { hasRegisteredSession } from "./wa/auth.ts";
-import { withSession } from "./wa/session.ts";
+import { openWhatsApp, withSession } from "./wa/session.ts";
 import { forgetOldSeen, handleInbound, handleTick } from "./store.ts";
 
 export interface Env {
@@ -16,14 +16,15 @@ export default {
     if (url.pathname === "/health") return new Response("ok");
     if (!authorized(request, env, url)) return new Response("未授權", { status: 401 });
 
-    if (url.pathname === "/link" || url.pathname === "/poll") {
-      const force = url.pathname === "/link";
+    if (url.pathname === "/link") {
       ctx.waitUntil(remember(env.DB, "last_request", new Date().toISOString()));
-      const result = await runCycle(env, { force, listenMs: LISTEN_MS });
-      if (url.pathname === "/poll") return Response.json(result);
-      return new Response(await adminHtml(env, result.qr), {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      return linkResponse(env, ctx);
+    }
+
+    if (url.pathname === "/poll") {
+      ctx.waitUntil(remember(env.DB, "last_request", new Date().toISOString()));
+      const result = await runCycle(env, { force: true, listenMs: LISTEN_MS });
+      return Response.json(result);
     }
 
     return new Response(await adminHtml(env), {
@@ -35,6 +36,31 @@ export default {
     ctx.waitUntil(runCycle(env, { force: false, listenMs: LISTEN_MS }));
   },
 };
+
+async function linkResponse(env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (!(await acquire(env.DB))) {
+    return new Response(await adminHtml(env), {
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+  }
+  const session = await openWhatsApp(env.DB);
+  await session.waitForQr(20_000);
+  const html = await adminHtml(env, session.qr());
+  ctx.waitUntil((async () => {
+    try {
+      await forgetOldSeen(env.DB, Date.now());
+      await session.pump(40_000, {
+        onMessage: (message, send) => handleInbound(env.DB, message, send, Date.now()),
+        onIdle: (send) => handleTick(env.DB, send, Date.now()),
+      });
+      await remember(env.DB, "last_poll", new Date().toISOString());
+    } finally {
+      await session.finish();
+      await release(env.DB);
+    }
+  })());
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+}
 
 async function runCycle(env: Env, options: { force: boolean; listenMs: number }): Promise<{
   status: string;
@@ -69,7 +95,7 @@ function authorized(request: Request, env: Env, url: URL): boolean {
 async function acquire(db: D1Database): Promise<boolean> {
   const row = await db.prepare("SELECT value FROM meta WHERE key = 'lock'").first<{ value: string }>();
   const now = Date.now();
-  if (row && now - Number(row.value) < 25_000) return false;
+  if (row && now - Number(row.value) < 90_000) return false;
   await remember(db, "lock", String(now));
   return true;
 }
